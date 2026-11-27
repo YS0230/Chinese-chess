@@ -14,7 +14,7 @@ const A = require('./public/anqi.js');
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_ROOMS = 50;
 const MAX_SPEC = 20;
-const EMPTY_TTL = 2 * 60e3;     // 空房保留
+const EMPTY_TTL = 15e3;         // 全員斷線（非離開）時保留，供重新整理/短暫斷線重連；全員離開則立即刪除
 const END_TTL = 10 * 60e3;      // 已結束房間保留
 const DISC_LIMIT = 90e3;        // 斷線判負
 const ASK_TTL = 30e3;           // 悔棋/和棋請求逾時
@@ -44,7 +44,9 @@ const ERR = {
   IN_ROOM: '你已在其他房間中',
   DRAW_COOLDOWN: '提和過於頻繁，請稍後再試',
   NO_ASK: '沒有待回應的請求',
-  NO_UNDO_DARK: '暗棋不支援悔棋'
+  NO_UNDO_DARK: '暗棋不支援悔棋',
+  NOT_ENDED: '對局尚未結束',
+  OPP_LEFT: '對方已離開房間'
 };
 
 /* ---------------- 靜態檔案（啟動時一次載入記憶體並預先 gzip） ---------------- */
@@ -144,7 +146,7 @@ function snapshot(room, s) {
     type: 'snapshot', id: room.id, nm: room.name, md: room.mode, tc: room.tcKey, base: room.tc[0], inc: room.tc[1],
     st: ST[room.status], you: s.role, p: { r: p('r'), b: p('b') }, b: boardStr(room), mv: room.moves,
     turn: room.turn, clk: clkNow(room), uc: room.undoCount, sp: room.spec.size, res: room.result,
-    ask: askInfo(room), dl: { r: dl('r'), b: dl('b') }
+    ask: askInfo(room), dl: { r: dl('r'), b: dl('b') }, ag: room.again
   };
   if (room.dk) { o.dc = room.dk.col; o.ch = room.dk.chain; }
   return o;
@@ -200,7 +202,9 @@ function stopDisc(room, c) {
 
 function checkEmpty(room) {
   if (!rooms.has(room.id)) return;
-  const online = members(room).some(s => s.ws && s.ws.readyState === 1);
+  const ms = members(room);
+  if (!ms.length) return deleteRoom(room, 'empty'); // 所有人都已離開
+  const online = ms.some(s => s.ws && s.ws.readyState === 1);
   if (online) { clearTimeout(room.emptyT); room.emptyT = null; }
   else if (!room.emptyT) room.emptyT = setTimeout(() => deleteRoom(room, 'empty'), EMPTY_TTL);
 }
@@ -238,21 +242,42 @@ function newRoom(s, name, tcKey, color, mode) {
   let id;
   do id = crypto.randomBytes(3).toString('hex'); while (rooms.has(id));
   const tc = TC[tcKey];
-  const dark = mode === 'dk';
-  const board = dark ? null : X.initialBoard();
   const room = {
-    id, name, tcKey, tc, mode: dark ? 'dk' : 'xq', status: 'wait', host: s.token,
+    id, name, tcKey, tc, mode: mode === 'dk' ? 'dk' : 'xq', status: 'wait', host: s.token,
     seats: { r: null, b: null }, names: { r: '', b: '' }, spec: new Set(),
-    board, dk: dark ? A.newState(rng) : null,
-    turn: 'r', moves: [], hist: dark ? [] : [{ b: board.slice(), clk: { r: tc[0], b: tc[0] }, turn: 'r' }],
-    clk: { r: tc[0], b: tc[0] }, turnStart: 0, timer: null,
-    undoCount: { r: 0, b: 0 }, ask: null, drawAt: { r: 0, b: 0 },
-    disc: { r: 0, b: 0 }, discT: { r: null, b: null },
-    result: null, emptyT: null, endT: null
+    turnStart: 0, timer: null, discT: { r: null, b: null }, emptyT: null, endT: null
   };
+  resetBoard(room);
   rooms.set(id, room);
   sit(s, room, color);
   return room;
+}
+
+/** 重設棋局相關狀態（建房與再來一局共用） */
+function resetBoard(room) {
+  const tc = room.tc, dark = room.mode === 'dk';
+  room.board = dark ? null : X.initialBoard();
+  room.dk = dark ? A.newState(rng) : null;
+  room.turn = 'r'; room.moves = [];
+  room.hist = dark ? [] : [{ b: room.board.slice(), clk: { r: tc[0], b: tc[0] }, turn: 'r' }];
+  room.clk = { r: tc[0], b: tc[0] };
+  room.undoCount = { r: 0, b: 0 }; room.ask = null; room.drawAt = { r: 0, b: 0 };
+  room.disc = { r: 0, b: 0 }; room.result = null; room.again = { r: false, b: false };
+}
+
+/** 再來一局：雙方交換座位（象棋紅黑互換、暗棋先後手互換），同房重新開始 */
+function rematch(room) {
+  clearTimeout(room.endT); room.endT = null;
+  room.seats = { r: room.seats.b, b: room.seats.r };
+  room.names = { r: room.names.b, b: room.names.r };
+  for (const c of ['r', 'b']) {
+    const x = sessions.get(room.seats[c]);
+    if (x && x.roomId === room.id) x.role = c;
+  }
+  resetBoard(room);
+  startGame(room);
+  for (const x of members(room)) send(x, snapshot(room, x));
+  lobbyDirty(room);
 }
 
 function sit(s, room, c) {
@@ -455,6 +480,19 @@ const H = {
     resolveDraw(room, m.ok === true || m.ok === 1, 'no');
   },
 
+  /** 再來一局：{ ok: true } 提出／同意，{ ok: false } 取消；雙方都提出即開新局 */
+  again(s, m, room) {
+    if (!room) return err(s, 'NOT_IN_ROOM');
+    const side = s.role;
+    if ((side !== 'r' && side !== 'b') || room.seats[side] !== s.token) return err(s, 'NOT_PLAYER');
+    if (room.status !== 'end') return err(s, 'NOT_ENDED');
+    const os = sessions.get(room.seats[X.opp(side)]);
+    if (!os || os.roomId !== room.id) return err(s, 'OPP_LEFT');
+    room.again[side] = m.ok !== false;
+    if (room.again.r && room.again.b) return rematch(room);
+    broadcast(room, { type: 'again', ag: room.again });
+  },
+
   resign(s, m, room) {
     const side = playerOf(s, room); if (!side) return;
     endGame(room, X.opp(side), 'resign');
@@ -474,7 +512,9 @@ const H = {
         for (const x of members(room)) send(x, snapshot(room, x));
       } else {
         s.roomId = null; s.role = null;
+        room.again = { r: false, b: false };
         broadcast(room, { type: 'presence', c: role, on: 0, w: 0, left: 1 });
+        broadcast(room, { type: 'again', ag: room.again });
       }
     }
     lobbyDirty(room);

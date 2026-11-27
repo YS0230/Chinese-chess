@@ -99,6 +99,29 @@ async function main() {
   const go = await s.next('game_over');
   assert.strictEqual(go.w, 'b'); assert.strictEqual(go.why, 'resign');
 
+  // 再來一局：雙方都同意 → 交換紅黑重新開始
+  a.send({ type: 'again', ok: true });
+  const ag1 = await b2.next('again'); assert.deepStrictEqual(ag1.ag, { r: true, b: false });
+  await a.next('again');
+  b2.send({ type: 'again', ok: true });
+  const ra = await a.next('snapshot'), rb = await b2.next('snapshot'), rs2 = await s.next('snapshot');
+  assert.strictEqual(ra.st, 'p'); assert.strictEqual(ra.you, 'b'); assert.strictEqual(rb.you, 'r');
+  assert.strictEqual(ra.mv.length, 0); assert.strictEqual(rs2.p.r.n, '乙');
+  b2.send({ type: 'again', ok: true });
+  assert.strictEqual((await b2.next('error')).code, 'NOT_ENDED');
+  a.send({ type: 'move', f: sq(7, 1), t: sq(7, 4) });
+  assert.strictEqual((await a.next('error')).code, 'NOT_YOUR_TURN', '交換後甲執黑');
+  b2.send({ type: 'resign' }); await a.next('game_over');
+  // 對方離開後不能再來一局
+  b2.send({ type: 'leave' }); await b2.next('lobby');
+  a.send({ type: 'again', ok: true });
+  assert.strictEqual((await a.next('error')).code, 'OPP_LEFT');
+  // 所有人離開 → 房間立即刪除
+  s.send({ type: 'leave' }); await s.next('lobby');
+  a.send({ type: 'leave' }); await a.next('lobby');
+  b2.send({ type: 'room_spectate', id: s1.id });
+  assert.strictEqual((await b2.next('error')).code, 'ROOM_NOT_FOUND');
+
   // 伺服器不認得的房間 → ROOM_GONE
   const z = await client('丁', { r: 'zzzzzz' });
   await z.next('welcome');

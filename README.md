@@ -47,9 +47,10 @@ npm test           # 引擎 + 整合測試
 - **計時**：走子時 `clk[side] -= now - turnStart` 後加秒並存入 `hist`；悔棋直接還原 `hist[L]`（含加秒後的一致時間）。只有輪到方一個超時 `setTimeout`。
 - **悔棋**：請求者為當前輪到方 → 回退 2 步；否則回退 1 步。每方每局 3 次、同時只有一個請求、30 秒逾時視為拒絕；請求期間有人走子則請求失效。
 - **斷線**：座位保留、時鐘照走；斷線 90 秒判負；對手看得到倒數。
-- **房間回收**：無任何連線 2 分鐘刪除；結束後 10 分鐘刪除；上限 50 房、每房觀戰 20 人。
+- **房間回收**：所有人都離開（按「大廳」）立即刪除；人還在但全員斷線 15 秒後刪除（保留重新整理/短暫斷線的重連空間）；結束後 10 分鐘刪除；上限 50 房、每房觀戰 20 人。
 - **大廳**：`room_patch` 差異推送，1 秒節流合併，只推給在大廳的連線。
 - **離開**：對局中按「大廳」＝認輸（有二次確認）。
+- **再來一局**：對局結束後雙方都按「再來一局」即在同房開新局，座位互換（象棋紅黑互換、暗棋先後手互換）；可取消；任一方離開即失效。
 
 ## 暗棋模式
 
@@ -82,6 +83,7 @@ npm test           # 引擎 + 整合測試
 | `dk` | `f`, `t` 或 `e:1` | 暗棋動作（翻/移/吃/結束連吃） |
 | `undo_req` / `undo_resp` | `ok` (resp) | 悔棋請求／回應 |
 | `draw_req` / `draw_resp` | `ok` (resp) | 提和／回應 |
+| `again` | `ok` true 提出/同意、false 取消 | 對局結束後再來一局 |
 | `resign` | — | 認輸 |
 | `leave` | — | 離開房間回大廳（對局中＝認輸） |
 | `sync` | — | 要求完整快照（回前景、序號不連續時） |
@@ -100,6 +102,7 @@ npm test           # 引擎 + 整合測試
 | `undo_applied` | `by,k` 回退步數, `n` 剩餘步數, `b`, `turn`, `clk`, `uc` | 悔棋生效（含觀戰者） |
 | `undo_rejected` / `draw_rejected` | `by`, `why` `no\|timeout\|moved` | 被拒／逾時／因走子失效 |
 | `game_over` | `w` `r\|b\|null`, `why` `mate\|stale\|time\|resign\|disc\|draw`, `clk` | 對局結束 |
+| `again` | `ag:{r,b}` 各座位是否想再來一局 | 再來一局狀態（雙方都同意時改送新的 `snapshot`） |
 | `presence` | `c`, `on`, `w` 斷線剩餘毫秒, `left?` | 玩家上/下線 |
 | `spec` | `n` | 觀戰人數 |
 | `room_closed` | `why` `empty\|expired\|error` | 房間關閉（隨後送 `lobby`） |
@@ -108,9 +111,9 @@ npm test           # 引擎 + 整合測試
 
 `Summary = { id, nm, r, b, st:'w'|'p'|'e', sp, tc, md }`
 
-`snapshot = { id, nm, tc, base, inc, st, you:'r'|'b'|'s', p:{r:{n,on},b:{n,on}}, b, mv:[[f,t,cap]], turn, clk, uc, sp, res, ask, dl:{r,b}, md, dc?, ch? }`（暗棋時 `b` 為視圖、`mv` 為暗棋紀錄 `['f'|'m'|'c'|'x', seat, …]`）
+`snapshot = { id, nm, tc, base, inc, st, you:'r'|'b'|'s', p:{r:{n,on},b:{n,on}}, b, mv:[[f,t,cap]], turn, clk, uc, sp, res, ask, dl:{r,b}, ag:{r,b}, md, dc?, ch? }`（暗棋時 `b` 為視圖、`mv` 為暗棋紀錄 `['f'|'m'|'c'|'x', seat, …]`）
 
-錯誤碼：`BAD_MSG NO_NICK ROOM_LIMIT ROOM_NOT_FOUND ROOM_GONE SEAT_TAKEN SPEC_LIMIT NOT_IN_ROOM NOT_PLAYER NOT_PLAYING NOT_YOUR_TURN ILLEGAL UNDO_LIMIT UNDO_NONE PENDING IN_ROOM DRAW_COOLDOWN NO_ASK NO_UNDO_DARK`
+錯誤碼：`BAD_MSG NO_NICK ROOM_LIMIT ROOM_NOT_FOUND ROOM_GONE SEAT_TAKEN SPEC_LIMIT NOT_IN_ROOM NOT_PLAYER NOT_PLAYING NOT_YOUR_TURN ILLEGAL UNDO_LIMIT UNDO_NONE PENDING IN_ROOM DRAW_COOLDOWN NO_ASK NO_UNDO_DARK NOT_ENDED OPP_LEFT`
 
 ## 省電設計重點
 
@@ -136,6 +139,8 @@ npm test           # 引擎 + 整合測試
 - [ ] **悔棋同意**：紅走、黑走後紅請求 → 回退 2 步、時間還原；紅走後立刻請求 → 回退 1 步。
 - [ ] **悔棋拒絕**：對方按拒絕 → 請求者看到提示。
 - [ ] **悔棋逾時**：對方不理 30 秒 → 視為拒絕；第 4 次請求被拒（上限 3）。
+- [ ] **再來一局**：結束後一方按「再來一局」→ 對方跳出邀請；同意後座位互換開新局；一方離開後按鈕停用。
+- [ ] **空房刪除**：等待中的房主按「大廳」→ 房間立即從大廳消失。
 - [ ] **提和/認輸**：提和同意 → 和棋；認輸需二次確認。
 - [ ] **觀戰中途加入**：C 在對局中按觀戰 → 看到完整棋盤與記錄、無悔棋/提和/認輸按鈕、可翻轉；悔棋時收到系統提示；觀戰人數更新。
 - [ ] **斷線 30 秒內重連**：B 開飛航模式 10 秒再關 → 頂部顯示「重新連線中…」，恢復後回到座位；A 看到斷線倒數後消失。

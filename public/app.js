@@ -161,6 +161,7 @@
       case 'undo_rejected': onRejected(m, '悔棋'); break;
       case 'draw_rejected': onRejected(m, '和棋'); break;
       case 'game_over': onGameOver(m); break;
+      case 'again': onAgain(m); break;
       case 'presence': onPresence(m); break;
       case 'spec': if (S.g) { S.g.sp = m.n; renderInfo(); } break;
       case 'room_closed':
@@ -450,7 +451,7 @@
       id: m.id, nm: m.nm, md: m.md || 'xq', dc: m.dc || null, ch: m.ch == null ? -1 : m.ch,
       tc: m.tc, base: m.base, inc: m.inc, st: m.st, you: m.you, p: m.p,
       board: X.fromString(m.b), moves: m.mv, notes: [], turn: m.turn, clk: m.clk, clkAt: nowMs(), uc: m.uc,
-      sp: m.sp, res: m.res, ask: null, dl: { r: 0, b: 0 }, sel: null, legal: [], wait: false
+      sp: m.sp, res: m.res, ask: null, ag: m.ag || { r: false, b: false }, dl: { r: 0, b: 0 }, sel: null, legal: [], wait: false
     };
     ['r', 'b'].forEach(function (c) { if (m.dl[c]) g.dl[c] = nowMs() + m.dl[c]; });
     clearSel();
@@ -470,6 +471,7 @@
     renderMoveList();
     renderAll();
     closeModal('ask');
+    if (g.st === 'p') { closeModal('over'); closeModal('cagain'); }
     if (m.ask && g.st === 'p') onAsk(m.ask, m.ask.k);
     dkAutoSel();
   }
@@ -570,10 +572,32 @@
     closeModal('ask');
     renderAll();
     var title = m.w ? (m.w === g.you ? '你贏了！' : (g.you === 's' ? seatName(m.w) + '勝' : '你輸了')) : '和棋';
-    modal('over', title, resultText(g.res), [
-      { label: '留在房間', fn: null },
-      { label: '返回大廳', cls: 'primary', fn: leaveRoom }
-    ]);
+    var btns = [{ label: '留在房間', fn: null }];
+    if (g.you === 'r' || g.you === 'b') btns.push({ label: '再來一局', cls: 'primary', fn: function () { sendAgain(true); } });
+    btns.push({ label: '返回大廳', cls: btns.length > 1 ? '' : 'primary', fn: leaveRoom });
+    modal('over', title, resultText(g.res), btns);
+  }
+  function oppLeft() { var g = S.g, o = g.p[X.opp(g.you)]; return !o || !!o.left; }
+  function sendAgain(ok) {
+    var g = S.g;
+    if (!g || g.st !== 'e') return;
+    if (ok && oppLeft()) { toast('對方已離開房間'); return; }
+    if (!send({ type: 'again', ok: ok })) toast('連線中斷，重新連線中…');
+  }
+  function onAgain(m) {
+    var g = S.g;
+    if (!g) return;
+    var prev = g.ag || {};
+    g.ag = m.ag;
+    var o = g.you === 'r' || g.you === 'b' ? X.opp(g.you) : null;
+    if (o && m.ag[o] && !prev[o]) {
+      if (modalId === 'over') closeModal();
+      if (m.ag[g.you]) return;
+      modal('cagain', '對方想再來一局', '同意後雙方交換' + (isDk() ? '先後手' : '紅黑') + '重新開始。', [
+        { label: '再來一局', cls: 'primary', fn: function () { sendAgain(true); } }, { label: '不要' }
+      ]);
+    } else if (o && !m.ag[o] && prev[o]) closeModal('cagain');
+    renderStatus(); renderActions();
   }
   function onPresence(m) {
     var g = S.g;
@@ -654,7 +678,14 @@
   function renderStatus() {
     var g = S.g, t = '';
     if (g.st === 'w') t = '等待對手加入…';
-    else if (g.st === 'e') t = resultText(g.res) || '對局已結束';
+    else if (g.st === 'e') {
+      t = resultText(g.res) || '對局已結束';
+      var ag = g.ag || {}, me = g.you, op = X.opp(g.you);
+      if (me === 'r' || me === 'b') {
+        if (ag[me] && !oppLeft()) t += '（已邀請再來一局，等待對方）';
+        else if (ag[op]) t += '（對方想再來一局）';
+      } else if (ag.r || ag.b) t += '（' + seatName(ag.r ? 'r' : 'b') + '想再來一局）';
+    }
     else if (isDk()) {
       var mineC = g.dc && g.dc[g.you];
       if (g.you === g.turn) {
@@ -713,18 +744,25 @@
   }
   function renderActions() {
     var g = S.g, player = g.you === 'r' || g.you === 'b', play = g.st === 'p';
-    ['aUndo', 'aDraw', 'aResign'].forEach(function (id) { $(id).hidden = !player; });
+    var ended = g.st === 'e';
+    ['aUndo', 'aDraw', 'aResign'].forEach(function (id) { $(id).hidden = !player || ended; });
     if (isDk()) {
       $('aUndo').hidden = true;
       $('aEnd').hidden = !player;
       $('aEnd').disabled = !play || g.turn !== g.you || g.ch < 0 || g.wait;
     } else $('aEnd').hidden = true;
+    if (ended) $('aEnd').hidden = true;
+    var againBtn = $('aAgain'), mineAg = player && g.ag && g.ag[g.you], opAg = player && g.ag && g.ag[X.opp(g.you)];
+    againBtn.hidden = !(player && ended);
+    againBtn.textContent = mineAg ? '取消再來一局' : opAg ? '接受再來一局' : '再來一局';
+    againBtn.className = 'btn' + (mineAg ? '' : ' primary');
+    againBtn.disabled = !mineAg && oppLeft();
     var left = player ? 3 - (g.uc[g.you] || 0) : 0;
     $('aUndo').textContent = '悔棋' + (player ? '(' + left + ')' : '');
     $('aUndo').disabled = !play || left <= 0;
     $('aDraw').disabled = !play;
     $('aResign').disabled = !play;
-    $('actions').style.gridTemplateColumns = player ? '' : 'repeat(2, 1fr)';
+    $('actions').style.gridTemplateColumns = !player ? 'repeat(2, 1fr)' : ended ? 'repeat(3, 1fr)' : '';
   }
   function moveLi(i) {
     var li = document.createElement('li');
@@ -810,6 +848,10 @@
     modal('cresign', '確定認輸？', '認輸後本局立即結束。', [
       { label: '認輸', cls: 'primary', fn: function () { send({ type: 'resign' }); } }, { label: '取消' }
     ]);
+  });
+  $('aAgain').addEventListener('click', function () {
+    var g = S.g;
+    if (g) sendAgain(!(g.ag && g.ag[g.you]));
   });
   $('aFlip').addEventListener('click', function () {
     if (!S.g) return;
