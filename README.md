@@ -8,8 +8,10 @@ Node.js + `ws` + 純 HTML/CSS/JS。不需資料庫、不需 build。目標部署
 |---|---|
 | `server.js` | HTTP 靜態檔 + `/healthz` + WebSocket（`/ws`），房間/對局/計時皆在記憶體 |
 | `public/xiangqi.js` | 規則引擎（純函式、UMD），伺服器與前端共用 |
+| `public/anqi.js` | 暗棋規則引擎（UMD，伺服器與前端共用；完整狀態只存在伺服器） |
 | `public/index.html` `app.css` `app.js` | 前端 |
 | `test/engine.test.js` | 規則引擎自測（蹩馬腿、炮翻山、王見王、將死、困斃、應將、記譜） |
+| `test/anqi.test.js` | 暗棋規則自測（大小/兵帥、車衝吃、炮、馬、暗吃成功/失敗、連吃、吃光、無棋可走、重複/50 步和局） |
 | `test/smoke.test.js` | 伺服器整合測試（建房、加入、走子、觀戰、悔棋、斷線重連、認輸、ROOM_GONE） |
 | `render.yaml` | Render Blueprint（選用） |
 
@@ -49,6 +51,18 @@ npm test           # 引擎 + 整合測試
 - **大廳**：`room_patch` 差異推送，1 秒節流合併，只推給在大廳的連線。
 - **離開**：對局中按「大廳」＝認輸（有二次確認）。
 
+## 暗棋模式
+
+建房時選「玩法：暗棋」。房間 `mode: 'dk'`，`room.dk` 為完整狀態 `{ p[32] 真實棋子, h[32] 是否蓋著, col:{r,b} 座位→顏色, turn, chain, quiet, rep, over }`。
+
+- **座位**：沿用 `r`/`b`，意義改為「先手 / 後手」；第一次翻棋後 `col` 決定各座位執的顏色。
+- **不洩漏**：送給客戶端的棋盤一律是視圖（32 字元，蓋著為 `?`），真實棋子只在被翻開時才送出。
+- **動作**：`{type:'dk', f, t}`，`f === t` 翻棋、目標空格為移動、否則為吃子（含暗吃）；`{type:'dk', e:1}` 連吃中結束回合。
+- **連吃**：吃子成功後若同一顆還有可吃目標（含蓋著的），回合不換手，`ch` 為該子位置；沒有目標則自動換手。整個回合（含連吃）只扣一次時間、加一次秒。
+- **悔棋**：暗棋不支援（翻棋會揭露資訊），回 `NO_UNDO_DARK`。提和、認輸、計時、斷線規則與象棋相同。
+- **結束**：`wipe` 吃光（蓋著的也算）、`stuck` 輪到時沒有合法動作、`rep` 同一局面（含輪到方）第 3 次出現、`fifty` 連續 50 步（雙方合計）未吃子也未翻棋。後兩者為和局（`w: null`）。
+- **座標**：`sq = r*4 + c`，r=7 為先手方底邊；記錄顯示為 a–d / 1–8。
+
 ## WebSocket 訊息表
 
 所有訊息皆為 JSON，含 `type`。座標 `f`/`t` 為 0–89 整數。時間單位毫秒。
@@ -60,10 +74,11 @@ npm test           # 引擎 + 整合測試
 | `hello` | `n` 暱稱, `t?` token, `r?` 房號 | 連線後第一則；重連時帶 token 與房號 |
 | `nick` | `n` | 修改暱稱 |
 | `lobby_sub` | — | 取得大廳完整列表並訂閱差異更新 |
-| `room_create` | `nm?` 房名(≤16), `tc` `fast\|std\|slow`, `c` `r\|x`(執紅/隨機) | 建房 |
+| `room_create` | `nm?` 房名(≤16), `tc` `fast\|std\|slow`, `c` `r\|x`(執紅或先手/隨機), `md?` `xq\|dk` | 建房 |
 | `room_join` | `id` | 加入空位 |
 | `room_spectate` | `id` | 觀戰 |
-| `move` | `f`, `t` | 走子 |
+| `move` | `f`, `t` | 走子（象棋） |
+| `dk` | `f`, `t` 或 `e:1` | 暗棋動作（翻/移/吃/結束連吃） |
 | `undo_req` / `undo_resp` | `ok` (resp) | 悔棋請求／回應 |
 | `draw_req` / `draw_resp` | `ok` (resp) | 提和／回應 |
 | `resign` | — | 認輸 |
@@ -79,6 +94,7 @@ npm test           # 引擎 + 整合測試
 | `room_patch` | `u:[Summary]`, `d:[id]` | 差異更新（新增/更新、刪除） |
 | `snapshot` | 見下 | 進房、重連、狀態校正 |
 | `move_ok` | `f,t,n` 步數, `turn`, `clk:{r,b}`, `chk` | 走子成功（含觀戰者） |
+| `dk_ok` | `e` 紀錄或 null, `n`, `b` 視圖, `turn`, `clk`, `dc` 座位顏色, `ch` 連吃位置(-1) | 暗棋動作成功 |
 | `undo_ask` / `draw_ask` | `k,by,n,w` 剩餘毫秒 | 請求（僅玩家） |
 | `undo_applied` | `by,k` 回退步數, `n` 剩餘步數, `b`, `turn`, `clk`, `uc` | 悔棋生效（含觀戰者） |
 | `undo_rejected` / `draw_rejected` | `by`, `why` `no\|timeout\|moved` | 被拒／逾時／因走子失效 |
@@ -89,11 +105,11 @@ npm test           # 引擎 + 整合測試
 | `kicked` | — | 同 token 在別處登入 |
 | `error` | `code`, `msg`（中文） | 錯誤 |
 
-`Summary = { id, nm, r, b, st:'w'|'p'|'e', sp, tc }`
+`Summary = { id, nm, r, b, st:'w'|'p'|'e', sp, tc, md }`
 
-`snapshot = { id, nm, tc, base, inc, st, you:'r'|'b'|'s', p:{r:{n,on},b:{n,on}}, b, mv:[[f,t,cap]], turn, clk, uc, sp, res, ask, dl:{r,b} }`
+`snapshot = { id, nm, tc, base, inc, st, you:'r'|'b'|'s', p:{r:{n,on},b:{n,on}}, b, mv:[[f,t,cap]], turn, clk, uc, sp, res, ask, dl:{r,b}, md, dc?, ch? }`（暗棋時 `b` 為視圖、`mv` 為暗棋紀錄 `['f'|'m'|'c'|'x', seat, …]`）
 
-錯誤碼：`BAD_MSG NO_NICK ROOM_LIMIT ROOM_NOT_FOUND ROOM_GONE SEAT_TAKEN SPEC_LIMIT NOT_IN_ROOM NOT_PLAYER NOT_PLAYING NOT_YOUR_TURN ILLEGAL UNDO_LIMIT UNDO_NONE PENDING IN_ROOM DRAW_COOLDOWN NO_ASK`
+錯誤碼：`BAD_MSG NO_NICK ROOM_LIMIT ROOM_NOT_FOUND ROOM_GONE SEAT_TAKEN SPEC_LIMIT NOT_IN_ROOM NOT_PLAYER NOT_PLAYING NOT_YOUR_TURN ILLEGAL UNDO_LIMIT UNDO_NONE PENDING IN_ROOM DRAW_COOLDOWN NO_ASK NO_UNDO_DARK`
 
 ## 省電設計重點
 

@@ -3,7 +3,7 @@
  */
 (function () {
   'use strict';
-  var X = window.Xiangqi;
+  var X = window.Xiangqi, A = window.Anqi;
   var $ = function (id) { return document.getElementById(id); };
   var LS = {
     get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
@@ -13,7 +13,9 @@
   var TC_LABEL = { fast: '快棋 3+2', std: '標準 10+10', slow: '慢棋 30+20' };
   var ST_LABEL = { w: '等待中', p: '對局中', e: '已結束' };
   var SIDE = { r: '紅方', b: '黑方' };
-  var WHY = { mate: '將死', stale: '困斃', time: '超時', resign: '認輸', disc: '斷線逾時', draw: '雙方同意和棋' };
+  var WHY = { mate: '將死', stale: '困斃', time: '超時', resign: '認輸', disc: '斷線逾時', draw: '雙方同意和棋',
+    wipe: '吃光', stuck: '無棋可走', rep: '同一局面重複三次，和棋', fifty: '連續 ' + A.FIFTY + ' 步未吃子也未翻棋，和棋' };
+  var MODE_LABEL = { xq: '象棋', dk: '暗棋' };
   var CLOSE_WHY = { empty: '房間已無人而關閉', expired: '房間已關閉', error: '房間發生錯誤，已關閉' };
   var nowMs = function () { return performance.now(); };
   var cpLen = function (s) { return Array.from(s).length; };
@@ -152,6 +154,7 @@
       case 'room_patch': onPatch(m); break;
       case 'snapshot': onSnapshot(m); break;
       case 'move_ok': onMoveOk(m); break;
+      case 'dk_ok': onDkOk(m); break;
       case 'undo_ask': onAsk(m, 'undo'); break;
       case 'draw_ask': onAsk(m, 'draw'); break;
       case 'undo_applied': onUndoApplied(m); break;
@@ -181,7 +184,7 @@
     }
     if (m.code === 'NO_NICK') { showNick(m.msg); return; }
     if (S.g) S.g.wait = false;
-    if (m.code === 'ILLEGAL' || m.code === 'NOT_YOUR_TURN') send({ type: 'sync' });
+    if (m.code === 'ILLEGAL' || m.code === 'NOT_YOUR_TURN' || m.code === 'NOT_PLAYING') send({ type: 'sync' });
     toast(m.msg || '發生錯誤');
   }
 
@@ -243,21 +246,26 @@
     el.querySelector('.t').textContent = r.nm;
     var pill = el.querySelector('.pill');
     pill.textContent = ST_LABEL[r.st]; pill.className = 'pill ' + r.st;
-    el.querySelector('.ppl').textContent = '紅：' + (r.r || '等待中') + '　黑：' + (r.b || '等待中');
-    el.querySelector('.meta').textContent = TC_LABEL[r.tc] + ' · 觀戰 ' + r.sp + ' 人 · #' + r.id;
+    var dk = r.md === 'dk';
+    el.querySelector('.ppl').textContent = (dk ? '先手：' : '紅：') + (r.r || '等待中') + (dk ? '　後手：' : '　黑：') + (r.b || '等待中');
+    el.querySelector('.meta').textContent = MODE_LABEL[r.md || 'xq'] + ' · ' + TC_LABEL[r.tc] + ' · 觀戰 ' + r.sp + ' 人 · #' + r.id;
     el.querySelector('.j').hidden = !(r.st === 'w' && (!r.r || !r.b));
   }
   $('btnCreate').addEventListener('click', function () { $('createForm').hidden = false; $('btnCreate').hidden = true; });
   $('cCancel').addEventListener('click', function () { $('createForm').hidden = true; $('btnCreate').hidden = false; });
+  $('cMode').addEventListener('change', function () {
+    $('cColorR').textContent = $('cMode').value === 'dk' ? '先手（第一步翻棋決定顏色）' : '執紅（先手）';
+  });
   $('createForm').addEventListener('submit', function (e) {
     e.preventDefault();
     var nm = $('cName').value.trim();
     if (cpLen(nm) > 16) { toast('房名最多 16 字'); return; }
-    if (!send({ type: 'room_create', nm: nm, tc: $('cTc').value, c: $('cColor').value })) { toast('尚未連線，請稍候'); return; }
+    if (!send({ type: 'room_create', nm: nm, tc: $('cTc').value, c: $('cColor').value, md: $('cMode').value })) { toast('尚未連線，請稍候'); return; }
     $('createForm').hidden = true; $('btnCreate').hidden = false;
   });
 
   /* ================= 棋盤（靜態線條一次繪製） ================= */
+  var LINES = {};
   (function drawLines() {
     var h = [], i;
     var L = function (x1, y1, x2, y2, w) { h.push('<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '" stroke-width="' + (w || 0.035) + '"/>'); };
@@ -282,8 +290,23 @@
     h.push('<path d="' + d + '" stroke-width="0.03"/>');
     h.push('<text x="2.5" y="5.17" font-size="0.6" text-anchor="middle">楚　河</text>');
     h.push('<text x="6.5" y="5.17" font-size="0.6" text-anchor="middle">漢　界</text>');
-    $('lines').innerHTML = h.join('');
+    LINES.xq = h.join('');
+    // 暗棋：4×8 方格，棋子放在格子中
+    h = [];
+    for (i = 1; i < A.H; i++) L(0.08, i, A.W - 0.08, i, i === A.H / 2 ? 0.06 : 0.03);
+    for (i = 1; i < A.W; i++) L(i, 0.08, i, A.H - 0.08, 0.03);
+    h.push('<rect x="0.08" y="0.08" width="' + (A.W - 0.16) + '" height="' + (A.H - 0.16) + '" stroke-width="0.07"/>');
+    LINES.dk = h.join('');
   })();
+  var curLines = '';
+  function setBoardMode(mode) {
+    if (curLines === mode) return;
+    curLines = mode;
+    var svg = $('lines');
+    svg.setAttribute('viewBox', mode === 'dk' ? '0 0 ' + A.W + ' ' + A.H : '0 0 9 10');
+    svg.innerHTML = LINES[mode];
+    boardEl.classList.toggle('dk', mode === 'dk');
+  }
 
   var boardEl = $('board'), piecesEl = $('pieces'), hintsEl = $('hints'), marksEl = $('marks');
   var pieceAt = new Map(); // sq -> element
@@ -292,18 +315,30 @@
   marksEl.appendChild(lmFrom); marksEl.appendChild(lmTo);
 
   function mkCell(cls) { var el = document.createElement('div'); el.className = cls; return el; }
+  function isDk() { return !!(S.g && S.g.md === 'dk'); }
+  function dims() { return isDk() ? { w: A.W, h: A.H, n: A.N } : { w: 9, h: 10, n: 90 }; }
   function bottomSide() { var base = S.g && S.g.you === 'b' ? 'b' : 'r'; return S.flip ? X.opp(base) : base; }
   function place(el, sq) {
-    var r = (sq / 9) | 0, c = sq % 9;
-    if (bottomSide() === 'b') { r = 9 - r; c = 8 - c; }
+    var d = dims(), r = (sq / d.w) | 0, c = sq % d.w;
+    if (bottomSide() === 'b') { r = d.h - 1 - r; c = d.w - 1 - c; }
     el.style.setProperty('--x', c); el.style.setProperty('--y', r);
   }
+  function pieceSide(ch) { return isDk() ? A.sideOf(ch) : X.sideOf(ch); }
   function mkPiece(ch) {
     var el = document.createElement('div');
-    el.className = 'pc ' + X.sideOf(ch);
-    var b = document.createElement('b'); b.textContent = X.NAMES[ch]; el.appendChild(b);
+    var b = document.createElement('b');
+    if (ch === '?') el.className = 'pc h';
+    else { el.className = 'pc ' + pieceSide(ch); b.textContent = (isDk() ? A.NAMES : X.NAMES)[ch]; }
+    el.appendChild(b);
     el.dataset.p = ch;
     return el;
+  }
+  /** 座位名稱：象棋為紅方/黑方；暗棋顏色決定前為先手/後手 */
+  function seatName(seat) {
+    var g = S.g;
+    if (!isDk()) return SIDE[seat];
+    var c = g.dc && g.dc[seat];
+    return c ? SIDE[c] : (seat === 'r' ? '先手' : '後手');
   }
   /** 依棋盤差異更新棋子節點（重用同種棋子節點以產生移動效果） */
   function syncPieces(board, animate) {
@@ -314,7 +349,7 @@
       (spare[el.dataset.p] = spare[el.dataset.p] || []).push(el);
       pieceAt.delete(sq);
     });
-    for (var sq = 0; sq < 90; sq++) if (board[sq] !== '.' && !pieceAt.has(sq)) need.push(sq);
+    for (var sq = 0; sq < board.length; sq++) if (board[sq] !== '.' && !pieceAt.has(sq)) need.push(sq);
     need.forEach(function (sq) {
       var ch = board[sq], el = spare[ch] && spare[ch].pop();
       if (!el) { el = mkPiece(ch); place(el, sq); piecesEl.appendChild(el); }
@@ -336,16 +371,56 @@
     if (g) { g.sel = null; g.legal = []; }
     hintsEl.textContent = '';
   }
+  function showHints(sq, list) {
+    var g = S.g;
+    g.sel = sq; g.legal = list;
+    var el = pieceAt.get(sq); if (el) el.classList.add('sel');
+    var frag = document.createDocumentFragment();
+    list.forEach(function (t) {
+      var q = g.board[t];
+      var h = mkCell('hint' + (q !== '.' ? ' cap' : '') + (q === '?' ? ' q' : ''));
+      h.dataset.sq = t; place(h, t); frag.appendChild(h);
+    });
+    hintsEl.appendChild(frag);
+  }
+  function dkSend(f, t) {
+    var g = S.g;
+    clearSel();
+    g.wait = true;
+    if (!send({ type: 'dk', f: f, t: t })) { g.wait = false; toast('連線中斷，重新連線中…'); }
+  }
+  /** 連吃中：自動選取正在連吃的棋子 */
+  function dkAutoSel() {
+    var g = S.g;
+    if (!g || !isDk() || g.ch < 0 || !canAct()) return;
+    clearSel();
+    showHints(g.ch, A.captureTargets(g.board, g.ch));
+  }
+  function dkClick(sq) {
+    var g = S.g, v = g.board[sq];
+    if (g.ch >= 0) { // 連吃中只能用同一顆棋子吃
+      if (g.legal.indexOf(sq) >= 0 && g.sel === g.ch) dkSend(g.ch, sq);
+      else dkAutoSel();
+      return;
+    }
+    if (g.sel != null && g.legal.indexOf(sq) >= 0) { dkSend(g.sel, sq); return; }
+    if (g.sel != null) { var had = g.sel; clearSel(); if (had === sq || v === '?') return; }
+    if (v === '?') { dkSend(sq, sq); return; } // 翻棋
+    var mine = g.dc && g.dc[g.you];
+    if (mine && A.sideOf(v) === mine) showHints(sq, A.moveTargets(g.board, sq).concat(A.captureTargets(g.board, sq)));
+  }
   function canAct() { var g = S.g; return g && g.st === 'p' && (g.you === 'r' || g.you === 'b') && g.turn === g.you && !g.wait; }
   boardEl.addEventListener('click', function (e) {
     var g = S.g;
     if (!g) return;
     var rect = boardEl.getBoundingClientRect();
-    var c = Math.floor((e.clientX - rect.left) / rect.width * 9), r = Math.floor((e.clientY - rect.top) / rect.height * 10);
-    if (c < 0 || c > 8 || r < 0 || r > 9) return;
-    if (bottomSide() === 'b') { r = 9 - r; c = 8 - c; }
-    var sq = r * 9 + c;
+    var d = dims();
+    var c = Math.floor((e.clientX - rect.left) / rect.width * d.w), r = Math.floor((e.clientY - rect.top) / rect.height * d.h);
+    if (c < 0 || c >= d.w || r < 0 || r >= d.h) return;
+    if (bottomSide() === 'b') { r = d.h - 1 - r; c = d.w - 1 - c; }
+    var sq = r * d.w + c;
     if (!canAct()) { clearSel(); return; }
+    if (isDk()) { dkClick(sq); return; }
     if (g.sel != null && g.legal.indexOf(sq) >= 0) {
       var f = g.sel; clearSel();
       g.wait = true; // 等伺服器確認
@@ -354,13 +429,7 @@
     }
     if (X.sideOf(g.board[sq]) === g.you && sq !== g.sel) {
       clearSel();
-      g.sel = sq; g.legal = X.legalMoves(g.board, sq);
-      pieceAt.get(sq).classList.add('sel');
-      var frag = document.createDocumentFragment();
-      g.legal.forEach(function (t) {
-        var h = mkCell('hint' + (g.board[t] !== '.' ? ' cap' : '')); place(h, t); frag.appendChild(h);
-      });
-      hintsEl.appendChild(frag);
+      showHints(sq, X.legalMoves(g.board, sq));
       return;
     }
     clearSel();
@@ -369,7 +438,8 @@
   /* ================= 對局狀態 ================= */
   function onSnapshot(m) {
     var g = {
-      id: m.id, nm: m.nm, tc: m.tc, base: m.base, inc: m.inc, st: m.st, you: m.you, p: m.p,
+      id: m.id, nm: m.nm, md: m.md || 'xq', dc: m.dc || null, ch: m.ch == null ? -1 : m.ch,
+      tc: m.tc, base: m.base, inc: m.inc, st: m.st, you: m.you, p: m.p,
       board: X.fromString(m.b), moves: m.mv, notes: [], turn: m.turn, clk: m.clk, clkAt: nowMs(), uc: m.uc,
       sp: m.sp, res: m.res, ask: null, dl: { r: 0, b: 0 }, sel: null, legal: [], wait: false
     };
@@ -377,10 +447,14 @@
     clearSel();
     var fresh = !S.g || S.g.id !== m.id;
     if (fresh) S.flip = false;
-    // 由走子記錄計算記譜
-    var b = X.initialBoard();
-    m.mv.forEach(function (mv) { g.notes.push(X.notation(b, mv[0], mv[1])); b = X.applyMove(b, mv[0], mv[1]); });
+    if (!S.g || S.g.md !== g.md) { pieceAt.forEach(function (el) { el.remove(); }); pieceAt.clear(); }
+    if (g.md === 'dk') g.notes = m.mv.map(A.note);
+    else { // 由走子記錄計算記譜
+      var b = X.initialBoard();
+      m.mv.forEach(function (mv) { g.notes.push(X.notation(b, mv[0], mv[1])); b = X.applyMove(b, mv[0], mv[1]); });
+    }
     S.g = g; S.roomId = m.id; LS.set('xq_room', m.id);
+    setBoardMode(g.md);
     lobbyClear();
     showScreen('game');
     syncPieces(g.board, false);
@@ -388,6 +462,7 @@
     renderAll();
     closeModal('ask');
     if (m.ask && g.st === 'p') onAsk(m.ask, m.ask.k);
+    dkAutoSel();
   }
   function lobbyClear() { $('createForm').hidden = true; $('btnCreate').hidden = false; }
 
@@ -413,6 +488,26 @@
     appendMove(g.moves.length - 1);
     renderAll();
     beep(!!cap && cap !== '.');
+  }
+
+  function onDkOk(m) {
+    var g = S.g;
+    if (!g || !isDk()) return;
+    var n = g.moves.length + (m.e ? 1 : 0);
+    if (m.n !== n) { send({ type: 'sync' }); return; }
+    clearSel();
+    g.wait = false;
+    if (m.e) { g.moves.push(m.e); g.notes.push(A.note(m.e)); }
+    g.board = m.b.split('');
+    g.turn = m.turn; g.clk = m.clk; g.clkAt = nowMs(); g.dc = m.dc; g.ch = m.ch;
+    piecesEl.querySelectorAll('.pc.top').forEach(function (x) { x.classList.remove('top'); });
+    syncPieces(g.board, true);
+    if (m.e && (m.e[0] === 'm' || m.e[0] === 'c')) { var el = pieceAt.get(m.e[3]); if (el) el.classList.add('top'); }
+    if (m.e) appendMove(g.moves.length - 1);
+    renderAll();
+    if (m.e) beep(m.e[0] === 'c');
+    if (m.e && m.e[0] === 'x' && m.e[1] === g.you) toast('暗吃失敗：翻出' + A.NAMES[m.e[5]]);
+    dkAutoSel();
   }
 
   function onAsk(a, k) {
@@ -463,7 +558,7 @@
     g.st = 'e'; g.res = { w: m.w, why: m.why }; g.clk = m.clk; g.clkAt = nowMs(); g.ask = null; g.dl = { r: 0, b: 0 };
     closeModal('ask');
     renderAll();
-    var title = m.w ? (m.w === g.you ? '你贏了！' : (g.you === 's' ? SIDE[m.w] + '勝' : '你輸了')) : '和棋';
+    var title = m.w ? (m.w === g.you ? '你贏了！' : (g.you === 's' ? seatName(m.w) + '勝' : '你輸了')) : '和棋';
     modal('over', title, resultText(g.res), [
       { label: '留在房間', fn: null },
       { label: '返回大廳', cls: 'primary', fn: leaveRoom }
@@ -480,10 +575,11 @@
   function resultText(res) {
     if (!res) return '';
     if (!res.w) return WHY[res.why] || '和棋';
-    var loser = X.opp(res.w);
-    var how = { mate: SIDE[loser] + '被將死', stale: SIDE[loser] + '困斃（無子可動）', time: SIDE[loser] + '超時',
-      resign: SIDE[loser] + '認輸', disc: SIDE[loser] + '斷線超過 90 秒' }[res.why] || '';
-    return SIDE[res.w] + '勝 — ' + how;
+    var loser = seatName(X.opp(res.w));
+    var how = { mate: loser + '被將死', stale: loser + '困斃（無子可動）', time: loser + '超時',
+      resign: loser + '認輸', disc: loser + '斷線超過 90 秒', wipe: loser + '的棋子被吃光',
+      stuck: loser + '沒有任何合法動作' }[res.why] || '';
+    return seatName(res.w) + '勝 — ' + how;
   }
 
   /* ================= 對局渲染（只更新變動節點） ================= */
@@ -496,7 +592,8 @@
       var el = $(x[0]), c = x[1], p = g.p[c];
       el.dataset.side = c;
       var side = el.querySelector('.side');
-      side.textContent = c === 'r' ? '帥' : '將'; side.className = 'side ' + c;
+      var col = isDk() ? g.dc && g.dc[c] : c;
+      side.textContent = col ? (col === 'r' ? '帥' : '將') : (c === 'r' ? '先' : '後'); side.className = 'side ' + (col || '');
       var name = p ? p.n + (g.you === c ? '（你）' : '') : '等待中…';
       el.querySelector('.pname').textContent = name;
       el.querySelector('.on').className = 'on' + (p && p.on ? ' y' : '');
@@ -505,17 +602,21 @@
   }
   function renderCaps() {
     var g = S.g, caps = { r: '', b: '' };
-    g.moves.forEach(function (mv) { if (mv[2]) caps[X.sideOf(mv[2]) === 'r' ? 'b' : 'r'] += X.NAMES[mv[2]]; });
+    if (isDk()) g.moves.forEach(function (e) { if (e[0] === 'c') caps[e[1]] += A.NAMES[e[5]]; });
+    else g.moves.forEach(function (mv) { if (mv[2]) caps[X.sideOf(mv[2]) === 'r' ? 'b' : 'r'] += X.NAMES[mv[2]]; });
     var bs = bars();
     $('barTop').querySelector('.caps').textContent = caps[bs.top];
     $('barBot').querySelector('.caps').textContent = caps[bs.bot];
   }
   function renderMarks() {
     var g = S.g, last = g.moves[g.moves.length - 1];
-    if (last) { place(lmFrom, last[0]); place(lmTo, last[1]); lmFrom.hidden = lmTo.hidden = false; }
-    else lmFrom.hidden = lmTo.hidden = true;
+    lmFrom.hidden = lmTo.hidden = true;
+    if (last && isDk()) {
+      if (last[0] === 'f') { place(lmTo, last[2]); lmTo.hidden = false; }
+      else { place(lmFrom, last[2]); place(lmTo, last[3]); lmFrom.hidden = lmTo.hidden = false; }
+    } else if (last) { place(lmFrom, last[0]); place(lmTo, last[1]); lmFrom.hidden = lmTo.hidden = false; }
     piecesEl.querySelectorAll('.pc.chk').forEach(function (x) { x.classList.remove('chk'); });
-    if (g.st !== 'w' && X.inCheck(g.board, g.turn)) {
+    if (!isDk() && g.st !== 'w' && X.inCheck(g.board, g.turn)) {
       var k = pieceAt.get(X.findKing(g.board, g.turn)); if (k) k.classList.add('chk');
     }
   }
@@ -523,7 +624,16 @@
     var g = S.g, t = '';
     if (g.st === 'w') t = '等待對手加入…';
     else if (g.st === 'e') t = resultText(g.res) || '對局已結束';
-    else {
+    else if (isDk()) {
+      var mineC = g.dc && g.dc[g.you];
+      if (g.you === g.turn) {
+        if (!mineC) t = '輪到你：翻開一顆棋子，翻到的顏色就是你的';
+        else if (g.ch >= 0) t = '連吃中：可繼續吃，或按「結束回合」';
+        else t = '輪到你（你執' + SIDE[mineC] + '）';
+      } else if (g.you === 'r' || g.you === 'b') t = '等待對方' + (g.ch >= 0 ? '連吃' : '行動');
+      else t = '輪到' + seatName(g.turn) + (g.ch >= 0 ? '（連吃中）' : '');
+      if (g.ask && g.ask.by === g.you) t += '（等待對方回應和棋）';
+    } else {
       var chk = X.inCheck(g.board, g.turn) ? '　將軍！' : '';
       if (g.you === g.turn) t = '輪到你走棋' + chk;
       else if (g.you === 'r' || g.you === 'b') t = '等待對方走棋' + chk;
@@ -538,8 +648,8 @@
       if (!g.p[c]) return;
       if (g.dl[c] && g.st === 'p') {
         var sec = Math.max(0, Math.ceil((g.dl[c] - nowMs()) / 1000));
-        parts.push((g.you !== 's' && c !== g.you ? '對方' : SIDE[c]) + '已斷線，剩餘等待 ' + sec + ' 秒');
-      } else if (g.p[c].left && g.you !== c) parts.push(SIDE[c] + '已離開房間');
+        parts.push((g.you !== 's' && c !== g.you ? '對方' : seatName(c)) + '已斷線，剩餘等待 ' + sec + ' 秒');
+      } else if (g.p[c].left && g.you !== c) parts.push(seatName(c) + '已離開房間');
     });
     var el = $('gNote'), txt = parts.join('；');
     if (el.textContent !== txt) el.textContent = txt;
@@ -547,12 +657,17 @@
   }
   function renderInfo() {
     var g = S.g;
-    var who = g.you === 's' ? '觀戰中' : '你執' + SIDE[g.you];
-    $('gInfo').textContent = g.nm + ' · #' + g.id + ' · ' + TC_LABEL[g.tc] + ' · ' + who + ' · 觀戰 ' + g.sp + ' 人';
+    var who = g.you === 's' ? '觀戰中' : isDk() ? '你是' + (g.you === 'r' ? '先手' : '後手') : '你執' + SIDE[g.you];
+    $('gInfo').textContent = g.nm + ' · #' + g.id + ' · ' + MODE_LABEL[g.md] + ' · ' + TC_LABEL[g.tc] + ' · ' + who + ' · 觀戰 ' + g.sp + ' 人';
   }
   function renderActions() {
     var g = S.g, player = g.you === 'r' || g.you === 'b', play = g.st === 'p';
     ['aUndo', 'aDraw', 'aResign'].forEach(function (id) { $(id).hidden = !player; });
+    if (isDk()) {
+      $('aUndo').hidden = true;
+      $('aEnd').hidden = !player;
+      $('aEnd').disabled = !play || g.turn !== g.you || g.ch < 0 || g.wait;
+    } else $('aEnd').hidden = true;
     var left = player ? 3 - (g.uc[g.you] || 0) : 0;
     $('aUndo').textContent = '悔棋' + (player ? '(' + left + ')' : '');
     $('aUndo').disabled = !play || left <= 0;
@@ -562,9 +677,15 @@
   }
   function moveLi(i) {
     var li = document.createElement('li');
-    li.className = i % 2 === 0 ? 'r' : 'b';
     var no = document.createElement('span'); no.className = 'no';
-    no.textContent = i % 2 === 0 ? (i / 2 + 1) + '.' : '';
+    if (isDk()) {
+      var e = S.g.moves[i], col = S.g.dc && S.g.dc[e[1]];
+      li.className = col || '';
+      no.textContent = (i + 1) + '.';
+    } else {
+      li.className = i % 2 === 0 ? 'r' : 'b';
+      no.textContent = i % 2 === 0 ? (i / 2 + 1) + '.' : '';
+    }
     li.appendChild(no); li.appendChild(document.createTextNode(S.g.notes[i]));
     return li;
   }
@@ -623,6 +744,12 @@
 
   /* ================= 操作列 ================= */
   $('aUndo').addEventListener('click', function () { send({ type: 'undo_req' }); });
+  $('aEnd').addEventListener('click', function () {
+    var g = S.g;
+    if (!g || !isDk() || g.ch < 0 || !canAct()) return;
+    clearSel(); g.wait = true; renderActions();
+    if (!send({ type: 'dk', e: 1 })) { g.wait = false; renderActions(); toast('連線中斷，重新連線中…'); }
+  });
   $('aDraw').addEventListener('click', function () {
     modal('cdraw', '提議和棋', '確定向對方提議和棋？', [
       { label: '提和', cls: 'primary', fn: function () { send({ type: 'draw_req' }); } }, { label: '取消' }
@@ -637,7 +764,7 @@
     if (!S.g) return;
     S.flip = !S.flip;
     replaceAll();
-    hintsEl.querySelectorAll('.hint').forEach(function (h, i) { place(h, S.g.legal[i]); });
+    hintsEl.querySelectorAll('.hint').forEach(function (h) { place(h, +h.dataset.sq); });
     renderBars(); renderCaps(); renderMarks(); updateClocks();
   });
   $('aLobby').addEventListener('click', function () {

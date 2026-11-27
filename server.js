@@ -9,6 +9,7 @@ const zlib = require('zlib');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const X = require('./public/xiangqi.js');
+const A = require('./public/anqi.js');
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_ROOMS = 50;
@@ -42,13 +43,14 @@ const ERR = {
   PENDING: '已有待回應的請求',
   IN_ROOM: '你已在其他房間中',
   DRAW_COOLDOWN: '提和過於頻繁，請稍後再試',
-  NO_ASK: '沒有待回應的請求'
+  NO_ASK: '沒有待回應的請求',
+  NO_UNDO_DARK: '暗棋不支援悔棋'
 };
 
 /* ---------------- 靜態檔案（啟動時一次載入記憶體並預先 gzip） ---------------- */
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'application/javascript; charset=utf-8' };
 const STATIC = {};
-for (const f of ['index.html', 'app.css', 'app.js', 'xiangqi.js']) {
+for (const f of ['index.html', 'app.css', 'app.js', 'xiangqi.js', 'anqi.js']) {
   const buf = fs.readFileSync(path.join(__dirname, 'public', f));
   STATIC['/' + f] = {
     buf, gz: zlib.gzipSync(buf), type: MIME[path.extname(f)],
@@ -127,21 +129,25 @@ function clkNow(room) {
 const ST = { wait: 'w', play: 'p', end: 'e' };
 function summary(room) {
   return { id: room.id, nm: room.name, r: room.seats.r ? room.names.r : null, b: room.seats.b ? room.names.b : null,
-    st: ST[room.status], sp: room.spec.size, tc: room.tcKey };
+    st: ST[room.status], sp: room.spec.size, tc: room.tcKey, md: room.mode };
 }
 function askInfo(room) {
   const a = room.ask;
   return a ? { k: a.k, by: a.by, n: a.n || 0, w: Math.max(0, ASK_TTL - (now() - a.at)) } : null;
 }
+/** 傳給客戶端的棋盤字串；暗棋只送視圖（蓋著的子為 '?'，不洩漏真實棋子） */
+function boardStr(room) { return room.dk ? A.view(room.dk).join('') : room.board.join(''); }
 function snapshot(room, s) {
   const p = c => room.seats[c] ? { n: room.names[c], on: isOnline(room.seats[c]) ? 1 : 0 } : null;
   const dl = c => room.disc[c] ? Math.max(0, DISC_LIMIT - (now() - room.disc[c])) : 0;
-  return {
-    type: 'snapshot', id: room.id, nm: room.name, tc: room.tcKey, base: room.tc[0], inc: room.tc[1],
-    st: ST[room.status], you: s.role, p: { r: p('r'), b: p('b') }, b: room.board.join(''), mv: room.moves,
+  const o = {
+    type: 'snapshot', id: room.id, nm: room.name, md: room.mode, tc: room.tcKey, base: room.tc[0], inc: room.tc[1],
+    st: ST[room.status], you: s.role, p: { r: p('r'), b: p('b') }, b: boardStr(room), mv: room.moves,
     turn: room.turn, clk: clkNow(room), uc: room.undoCount, sp: room.spec.size, res: room.result,
     ask: askInfo(room), dl: { r: dl('r'), b: dl('b') }
   };
+  if (room.dk) { o.dc = room.dk.col; o.ch = room.dk.chain; }
+  return o;
 }
 
 /* ---------------- 大廳差異更新（1 秒節流） ---------------- */
@@ -227,15 +233,18 @@ function guard(room, fn) {
 }
 
 /* ---------------- 對局流程 ---------------- */
-function newRoom(s, name, tcKey, color) {
+const rng = () => crypto.randomInt(0x100000000) / 0x100000000;
+function newRoom(s, name, tcKey, color, mode) {
   let id;
   do id = crypto.randomBytes(3).toString('hex'); while (rooms.has(id));
   const tc = TC[tcKey];
-  const board = X.initialBoard();
+  const dark = mode === 'dk';
+  const board = dark ? null : X.initialBoard();
   const room = {
-    id, name, tcKey, tc, status: 'wait', host: s.token,
+    id, name, tcKey, tc, mode: dark ? 'dk' : 'xq', status: 'wait', host: s.token,
     seats: { r: null, b: null }, names: { r: '', b: '' }, spec: new Set(),
-    board, turn: 'r', moves: [], hist: [{ b: board.slice(), clk: { r: tc[0], b: tc[0] }, turn: 'r' }],
+    board, dk: dark ? A.newState(rng) : null,
+    turn: 'r', moves: [], hist: dark ? [] : [{ b: board.slice(), clk: { r: tc[0], b: tc[0] }, turn: 'r' }],
     clk: { r: tc[0], b: tc[0] }, turnStart: 0, timer: null,
     undoCount: { r: 0, b: 0 }, ask: null, drawAt: { r: 0, b: 0 },
     disc: { r: 0, b: 0 }, discT: { r: null, b: null },
@@ -326,7 +335,7 @@ const H = {
     const tcKey = TC[m.tc] ? m.tc : 'std';
     const name = cleanText(m.nm, 16) || (s.nick + ' 的房間');
     const color = m.c === 'x' ? (Math.random() < 0.5 ? 'r' : 'b') : 'r';
-    const r = newRoom(s, name, tcKey, color);
+    const r = newRoom(s, name, tcKey, color, m.md === 'dk' ? 'dk' : 'xq');
     send(s, snapshot(r, s));
     lobbyDirty(r);
   },
@@ -363,6 +372,7 @@ const H = {
 
   move(s, m, room) {
     const side = playerOf(s, room); if (!side) return;
+    if (room.dk) return err(s, 'BAD_MSG');
     if (room.turn !== side) return err(s, 'NOT_YOUR_TURN');
     const f = m.f, t = m.t;
     if (!Number.isInteger(f) || !Number.isInteger(t)) return err(s, 'BAD_MSG');
@@ -386,8 +396,36 @@ const H = {
     armClock(room);
   },
 
+  /** 暗棋動作：{ f, t }（f === t 為翻棋）或 { e: 1 } 結束連吃 */
+  dk(s, m, room) {
+    const side = playerOf(s, room); if (!side) return;
+    if (!room.dk) return err(s, 'BAD_MSG');
+    if (room.turn !== side) return err(s, 'NOT_YOUR_TURN');
+    const end = m.e === 1 || m.e === true;
+    if (!end && (!Number.isInteger(m.f) || !Number.isInteger(m.t))) return err(s, 'BAD_MSG');
+    const ts = now();
+    if (room.clk[side] - (ts - room.turnStart) <= 0) return endGame(room, X.opp(side), 'time');
+    let r;
+    if (end) r = A.endChain(room.dk, side) ? { e: null, pass: true } : null;
+    else r = A.act(room.dk, side, m.f, m.t);
+    if (!r) return err(s, 'ILLEGAL');
+    if (r.e) room.moves.push(r.e);
+    if (r.pass) {
+      room.clk[side] -= ts - room.turnStart;
+      room.clk[side] += room.tc[1]; // Fischer 加秒（整個回合，含連吃）
+      room.turn = room.dk.turn;
+      room.turnStart = ts;
+    }
+    if (room.ask && room.ask.k === 'draw' && room.ask.by !== side) resolveDraw(room, false, 'moved');
+    broadcast(room, { type: 'dk_ok', e: r.e, n: room.moves.length, b: boardStr(room), turn: room.turn,
+      clk: clkNow(room), dc: room.dk.col, ch: room.dk.chain });
+    if (room.dk.over) return endGame(room, room.dk.over.w, room.dk.over.why);
+    armClock(room);
+  },
+
   undo_req(s, m, room) {
     const side = playerOf(s, room); if (!side) return;
+    if (room.dk) return err(s, 'NO_UNDO_DARK');
     if (room.ask) return err(s, 'PENDING');
     if (room.undoCount[side] >= MAX_UNDO) return err(s, 'UNDO_LIMIT');
     const n = room.turn === side ? 2 : 1;

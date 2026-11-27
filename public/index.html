@@ -39,6 +39,12 @@
   </div>
   <form id="createForm" class="card create" hidden autocomplete="off">
     <label>房名<input id="cName" maxlength="32" placeholder="（選填）"></label>
+    <label>玩法
+      <select id="cMode">
+        <option value="xq" selected>象棋</option>
+        <option value="dk">暗棋（4×8 翻棋）</option>
+      </select>
+    </label>
     <label>時間規則
       <select id="cTc">
         <option value="fast">快棋　3 分 + 2 秒</option>
@@ -48,7 +54,7 @@
     </label>
     <label>執子
       <select id="cColor">
-        <option value="r">執紅（先手）</option>
+        <option value="r" id="cColorR">執紅（先手）</option>
         <option value="x">隨機</option>
       </select>
     </label>
@@ -86,6 +92,7 @@
     <div id="gInfo" class="muted small"></div>
   </div>
   <div class="actions" id="actions">
+    <button id="aEnd" class="btn primary" type="button" hidden>結束回合</button>
     <button id="aUndo" class="btn" type="button">悔棋</button>
     <button id="aDraw" class="btn" type="button">提和</button>
     <button id="aResign" class="btn danger" type="button">認輸</button>
@@ -108,6 +115,7 @@
 </div>
 
 <script src="/xiangqi.js"></script>
+<script src="/anqi.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

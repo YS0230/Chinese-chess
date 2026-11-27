@@ -104,6 +104,35 @@ async function main() {
   await z.next('welcome');
   assert.strictEqual((await z.next('error')).code, 'ROOM_GONE');
 
+  // ---------- 暗棋 ----------
+  const c = await client('戊'), d = await client('己');
+  await c.next('welcome'); await c.next('lobby'); await d.next('welcome'); await d.next('lobby');
+  c.send({ type: 'room_create', nm: '暗棋房', tc: 'std', c: 'r', md: 'dk' });
+  const k1 = await c.next('snapshot');
+  assert.strictEqual(k1.md, 'dk'); assert.strictEqual(k1.b, '?'.repeat(32), '開局全部蓋著且不洩漏');
+  d.send({ type: 'room_join', id: k1.id });
+  const k2 = await d.next('snapshot'); await c.next('snapshot');
+  assert.strictEqual(k2.st, 'p'); assert.deepStrictEqual(k2.dc, { r: null, b: null });
+  d.send({ type: 'dk', f: 0, t: 0 });
+  assert.strictEqual((await d.next('error')).code, 'NOT_YOUR_TURN');
+  c.send({ type: 'dk', f: 0, t: 1 });
+  assert.strictEqual((await c.next('error')).code, 'ILLEGAL', '顏色未定只能翻棋');
+  c.send({ type: 'move', f: 0, t: 1 });
+  assert.strictEqual((await c.next('error')).code, 'BAD_MSG');
+  c.send({ type: 'undo_req' });
+  assert.strictEqual((await c.next('error')).code, 'NO_UNDO_DARK');
+  c.send({ type: 'dk', f: 5, t: 5 });
+  const f1 = await d.next('dk_ok'); await c.next('dk_ok');
+  assert.strictEqual(f1.e[0], 'f'); assert.strictEqual(f1.turn, 'b');
+  assert.strictEqual(f1.b.replace(/\?/g, '').length, 1, '只有翻開的那顆可見');
+  assert.strictEqual(f1.b[5], f1.e[3]);
+  const col = f1.e[3] < 'a' ? 'r' : 'b';
+  assert.deepStrictEqual(f1.dc, { r: col, b: col === 'r' ? 'b' : 'r' });
+  c.send({ type: 'dk', e: 1 });
+  assert.strictEqual((await c.next('error')).code, 'NOT_YOUR_TURN');
+  d.send({ type: 'dk', e: 1 });
+  assert.strictEqual((await d.next('error')).code, 'ILLEGAL', '沒有連吃不能結束回合');
+
   console.log('smoke test passed');
 }
 
