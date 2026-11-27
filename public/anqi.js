@@ -46,7 +46,6 @@
     if (!sideOf(p) || !(t >= 0 && t < N) || t === f || b[t] === '.') return null;
     var fr = (f / W) | 0, fc = f % W, dr = ((t / W) | 0) - fr, dc = t % W - fc;
     var orth = dr === 0 || dc === 0, d = Math.abs(dr) + Math.abs(dc);
-    var mid = orth && d === 2 ? (fr + dr / 2) * W + fc + dc / 2 : -1;
     switch (p.toLowerCase()) {
       case 'n': return Math.abs(dr) === 1 && Math.abs(dc) === 1 ? 'free' : null;
       case 'c': { // 同一直線、中間剛好隔一顆（炮架），距離不限
@@ -55,9 +54,12 @@
         for (var i = 1; i < d; i++) if (b[(fr + sr * i) * W + fc + sc * i] !== '.') n++;
         return n === 1 ? 'free' : null;
       }
-      case 'r':
-        if (orth && d === 1) return 'rank';
-        return mid >= 0 && b[mid] === '.' ? 'free' : null;
+      case 'r': // 相鄰一格比大小；更遠且中間全是空格為衝吃，距離不限、不看大小
+        if (!orth) return null;
+        if (d === 1) return 'rank';
+        var rr = dr ? dr / Math.abs(dr) : 0, rc = dc ? dc / Math.abs(dc) : 0;
+        for (var j = 1; j < d; j++) if (b[(fr + rr * j) * W + fc + rc * j] !== '.') return null;
+        return 'free';
       default: return orth && d === 1 ? 'rank' : null;
     }
   }

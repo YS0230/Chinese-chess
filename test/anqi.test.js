@@ -67,17 +67,28 @@ test('依大小吃子：帥不能吃卒、卒可以吃將', () => {
   assert.deepStrictEqual(A.captureTargets(v, sq(6, 0)), [sq(6, 1)]);
 });
 
-test('俥：相鄰吃看大小，隔一空格衝吃不看大小', () => {
+test('俥：相鄰吃看大小，中間全空的衝吃不看大小', () => {
   const st = state([[4, 0, 'R'], [4, 1, 'a'], [2, 0, 'k'], [4, 3, 'p'], [6, 0, 'n'], [5, 0, 'P']]);
   const v = A.view(st);
   const caps = A.captureTargets(v, sq(4, 0));
   assert.ok(!caps.includes(sq(4, 1)), '相鄰的士比俥大，不能吃');
   assert.ok(caps.includes(sq(2, 0)), '衝吃將');
-  assert.ok(!caps.includes(sq(4, 3)), '超過兩格不行');
+  assert.ok(!caps.includes(sq(4, 3)), '中間有士擋住不能衝');
   assert.ok(!caps.includes(sq(6, 0)), '中間不是空格不能衝');
   const r = A.act(st, 'r', sq(4, 0), sq(2, 0));
   assert.deepStrictEqual(r.e, ['c', 'r', sq(4, 0), sq(2, 0), 'R', 'k', 0]);
   assert.strictEqual(st.p[sq(2, 0)], 'R');
+});
+
+test('俥：衝吃距離不限，衝到碰到的第一顆', () => {
+  const st = state([[7, 0, 'R'], [0, 0, 'k'], [7, 3, 'a', 1], [3, 0, 'P']]);
+  let caps = A.captureTargets(A.view(st), sq(7, 0));
+  assert.deepStrictEqual(caps, [sq(7, 3)], '縱向被自己的兵擋住；橫向可衝暗吃 3 格外的蓋牌');
+  st.p[sq(3, 0)] = '.';
+  caps = A.captureTargets(A.view(st), sq(7, 0));
+  assert.deepStrictEqual(caps, [sq(0, 0), sq(7, 3)], '兵移開後可衝 7 格吃將');
+  const r = A.act(st, 'r', sq(7, 0), sq(7, 3)); // 衝吃蓋著的士：不看大小 → 成功
+  assert.deepStrictEqual(r.e, ['c', 'r', sq(7, 0), sq(7, 3), 'R', 'a', 1]);
 });
 
 test('炮：隔一顆棋子吃炮架後的第一顆，不看大小；不能吃相鄰的', () => {
