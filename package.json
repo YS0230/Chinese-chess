@@ -1,0 +1,17 @@
+{
+  "name": "xiangqi-online",
+  "version": "1.0.0",
+  "description": "線上雙人中國象棋（Node.js + ws，記憶體狀態，適用 Render 免費方案）",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/engine.test.js && node test/smoke.test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
