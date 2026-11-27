@@ -49,7 +49,12 @@
     var mid = orth && d === 2 ? (fr + dr / 2) * W + fc + dc / 2 : -1;
     switch (p.toLowerCase()) {
       case 'n': return Math.abs(dr) === 1 && Math.abs(dc) === 1 ? 'free' : null;
-      case 'c': return mid >= 0 && b[mid] !== '.' ? 'free' : null;
+      case 'c': { // 同一直線、中間剛好隔一顆（炮架），距離不限
+        if (!orth || d < 2) return null;
+        var sr = dr ? dr / Math.abs(dr) : 0, sc = dc ? dc / Math.abs(dc) : 0, n = 0;
+        for (var i = 1; i < d; i++) if (b[(fr + sr * i) * W + fc + sc * i] !== '.') n++;
+        return n === 1 ? 'free' : null;
+      }
       case 'r':
         if (orth && d === 1) return 'rank';
         return mid >= 0 && b[mid] === '.' ? 'free' : null;

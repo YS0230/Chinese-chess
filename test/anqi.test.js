@@ -80,12 +80,22 @@ test('俥：相鄰吃看大小，隔一空格衝吃不看大小', () => {
   assert.strictEqual(st.p[sq(2, 0)], 'R');
 });
 
-test('炮：隔一顆棋子吃兩格遠的，不看大小；不能吃相鄰或更遠', () => {
+test('炮：隔一顆棋子吃炮架後的第一顆，不看大小；不能吃相鄰的', () => {
   const st = state([[7, 0, 'C'], [6, 0, 'P'], [5, 0, 'k'], [7, 1, 'a'], [7, 3, 'b'], [4, 0, 'r']]);
   const v = A.view(st);
-  assert.deepStrictEqual(A.captureTargets(v, sq(7, 0)), [sq(5, 0)]);
+  // 直向：隔兵吃將，車前面隔了兩顆不行；橫向：相鄰的士不能吃，但隔士可吃象
+  assert.deepStrictEqual(A.captureTargets(v, sq(7, 0)), [sq(5, 0), sq(7, 3)]);
   st.h[sq(6, 0)] = 1; // 炮架是蓋著的也可以
-  assert.deepStrictEqual(A.captureTargets(A.view(st), sq(7, 0)), [sq(5, 0)]);
+  assert.deepStrictEqual(A.captureTargets(A.view(st), sq(7, 0)), [sq(5, 0), sq(7, 3)]);
+});
+
+test('炮：架炮後距離不限（炮與炮架、炮架與目標之間可有空格）', () => {
+  const st = state([[7, 1, 'C'], [4, 1, 'P'], [0, 1, 'k'], [7, 3, 'r']]);
+  assert.deepStrictEqual(A.captureTargets(A.view(st), sq(7, 1)), [sq(0, 1)]);
+  const r = A.act(st, 'r', sq(7, 1), sq(0, 1));
+  assert.deepStrictEqual(r.e, ['c', 'r', sq(7, 1), sq(0, 1), 'C', 'k', 0]);
+  const st2 = state([[0, 0, 'C'], [0, 1, 'p', 1], [0, 3, 'r']]);
+  assert.deepStrictEqual(A.captureTargets(A.view(st2), sq(0, 0)), [sq(0, 3)], '橫向：隔蓋著的子吃 3 格遠的車');
 });
 
 test('傌：斜吃一格，不看大小', () => {

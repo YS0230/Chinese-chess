@@ -333,6 +333,15 @@
     el.dataset.p = ch;
     return el;
   }
+  /** 被吃的棋子在原位淡出（一次性 CSS 動畫） */
+  function ghost(ch, sq) {
+    var el = mkPiece(ch);
+    el.classList.add('ghost'); place(el, sq);
+    piecesEl.appendChild(el);
+    var done = function () { el.remove(); };
+    el.addEventListener('animationend', done);
+    setTimeout(done, 1200);
+  }
   /** 座位名稱：象棋為紅方/黑方；暗棋顏色決定前為先手/後手 */
   function seatName(seat) {
     var g = S.g;
@@ -446,7 +455,7 @@
     ['r', 'b'].forEach(function (c) { if (m.dl[c]) g.dl[c] = nowMs() + m.dl[c]; });
     clearSel();
     var fresh = !S.g || S.g.id !== m.id;
-    if (fresh) S.flip = false;
+    if (fresh) { S.flip = false; lastMine = false; }
     if (!S.g || S.g.md !== g.md) { pieceAt.forEach(function (el) { el.remove(); }); pieceAt.clear(); }
     if (g.md === 'dk') g.notes = m.mv.map(A.note);
     else { // 由走子記錄計算記譜
@@ -476,7 +485,7 @@
     g.notes.push(X.notation(g.board, m.f, m.t));
     g.moves.push([m.f, m.t, cap === '.' ? '' : cap]);
     var el = pieceAt.get(m.f), victim = pieceAt.get(m.t);
-    if (victim) victim.remove();
+    if (victim) { victim.remove(); ghost(cap, m.t); }
     if (el) {
       pieceAt.delete(m.f); pieceAt.set(m.t, el);
       piecesEl.querySelectorAll('.pc.top').forEach(function (x) { x.classList.remove('top'); });
@@ -502,11 +511,13 @@
     g.turn = m.turn; g.clk = m.clk; g.clkAt = nowMs(); g.dc = m.dc; g.ch = m.ch;
     piecesEl.querySelectorAll('.pc.top').forEach(function (x) { x.classList.remove('top'); });
     syncPieces(g.board, true);
+    if (m.e && m.e[0] === 'c') ghost(m.e[5], m.e[3]);
     if (m.e && (m.e[0] === 'm' || m.e[0] === 'c')) { var el = pieceAt.get(m.e[3]); if (el) el.classList.add('top'); }
     if (m.e) appendMove(g.moves.length - 1);
     renderAll();
     if (m.e) beep(m.e[0] === 'c');
-    if (m.e && m.e[0] === 'x' && m.e[1] === g.you) toast('暗吃失敗：翻出' + A.NAMES[m.e[5]]);
+    if (m.e && m.e[0] === 'c') toast(seatName(m.e[1]) + '：' + A.NAMES[m.e[4]] + (m.e[6] ? '暗吃' : '吃') + A.NAMES[m.e[5]]);
+    else if (m.e && m.e[0] === 'x') toast(seatName(m.e[1]) + '暗吃失敗：翻出' + A.NAMES[m.e[5]]);
     dkAutoSel();
   }
 
@@ -583,7 +594,19 @@
   }
 
   /* ================= 對局渲染（只更新變動節點） ================= */
-  function renderAll() { renderBars(); renderMarks(); renderStatus(); renderNote(); renderInfo(); renderActions(); renderCaps(); updateClocks(); updateTick(); }
+  /** 輪到自己時棋盤閃爍（一次性動畫，約 1.5 秒；連吃中回合未換手不會重複閃） */
+  var lastMine = false;
+  function flashTurn() {
+    var g = S.g;
+    var mine = !!g && g.st === 'p' && (g.you === 'r' || g.you === 'b') && g.turn === g.you;
+    if (mine && !lastMine && !document.hidden) {
+      boardEl.classList.remove('flash'); void boardEl.offsetWidth; boardEl.classList.add('flash');
+    }
+    if (!mine) boardEl.classList.remove('flash');
+    lastMine = mine;
+  }
+  boardEl.addEventListener('animationend', function (e) { if (e.target === boardEl) boardEl.classList.remove('flash'); });
+  function renderAll() { flashTurn(); renderBars(); renderMarks(); renderStatus(); renderNote(); renderInfo(); renderActions(); renderCaps(); updateClocks(); updateTick(); }
 
   function bars() { var bot = bottomSide(); return { top: X.opp(bot), bot: bot }; }
   function renderBars() {
@@ -601,12 +624,20 @@
     });
   }
   function renderCaps() {
-    var g = S.g, caps = { r: '', b: '' };
-    if (isDk()) g.moves.forEach(function (e) { if (e[0] === 'c') caps[e[1]] += A.NAMES[e[5]]; });
-    else g.moves.forEach(function (mv) { if (mv[2]) caps[X.sideOf(mv[2]) === 'r' ? 'b' : 'r'] += X.NAMES[mv[2]]; });
-    var bs = bars();
-    $('barTop').querySelector('.caps').textContent = caps[bs.top];
-    $('barBot').querySelector('.caps').textContent = caps[bs.bot];
+    var g = S.g, caps = { r: [], b: [] };
+    if (isDk()) g.moves.forEach(function (e) { if (e[0] === 'c') caps[e[1]].push(e[5]); });
+    else g.moves.forEach(function (mv) { if (mv[2]) caps[X.sideOf(mv[2]) === 'r' ? 'b' : 'r'].push(mv[2]); });
+    var bs = bars(), names = isDk() ? A.NAMES : X.NAMES;
+    [['barTop', bs.top], ['barBot', bs.bot]].forEach(function (x) {
+      var el = $(x[0]).querySelector('.caps'), list = caps[x[1]];
+      el.textContent = '';
+      if (list.length) el.appendChild(document.createTextNode('吃：'));
+      list.forEach(function (p) {
+        var sp = document.createElement('span');
+        sp.className = 'cp ' + pieceSide(p); sp.textContent = names[p];
+        el.appendChild(sp);
+      });
+    });
   }
   function renderMarks() {
     var g = S.g, last = g.moves[g.moves.length - 1];
@@ -641,6 +672,26 @@
       if (g.ask && g.ask.by === g.you) t += '（等待對方回應' + (g.ask.k === 'undo' ? '悔棋' : '和棋') + '）';
     }
     $('gStatus').textContent = t;
+    renderLast();
+  }
+  /** 上一步說明（含吃了哪顆子） */
+  function renderLast() {
+    var g = S.g, i = g.moves.length - 1, t = '', cls = '';
+    if (i >= 0) {
+      if (isDk()) {
+        var e = g.moves[i];
+        t = seatName(e[1]) + '：' + g.notes[i];
+        cls = e[0] === 'c' || e[0] === 'x' ? ' cap' : '';
+      } else {
+        var mv = g.moves[i];
+        t = SIDE[i % 2 === 0 ? 'r' : 'b'] + '：' + g.notes[i] + (mv[2] ? '，吃' + X.NAMES[mv[2]] : '');
+        cls = mv[2] ? ' cap' : '';
+      }
+    }
+    var el = $('gLast');
+    el.textContent = t ? '上一步　' + t : '';
+    el.className = 'last' + cls;
+    el.hidden = !t;
   }
   function renderNote() {
     var g = S.g, parts = [];
