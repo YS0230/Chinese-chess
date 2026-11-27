@@ -142,7 +142,10 @@ input, select {
 .pc.ghost { z-index: 3; pointer-events: none; animation: ghost .9s ease-out forwards; }
 .pc.ghost b { outline: 3px solid var(--warn); outline-offset: 1px; }
 @keyframes ghost { 0% { opacity: 1; } 60% { opacity: .85; } 100% { opacity: 0; } }
-.pbar .caps .cp { font-weight: 700; } .pbar .caps .cp.r { color: var(--red); } .pbar .caps .cp.b { color: var(--fg); }
+.pbar .caps { letter-spacing: 0; white-space: nowrap; overflow: hidden; }
+.pbar .caps .cp { font-weight: 700; display: inline-block; min-width: 1.15em; text-align: center; }
+.pbar .caps .cp.r { color: var(--red); } .pbar .caps .cp.b { color: var(--fg); }
+.pbar .caps .cp.dead { opacity: .25; text-decoration: line-through; font-weight: 400; }
 .gstatus .last { font-size: .9rem; color: var(--muted); }
 .gstatus .last.cap { color: var(--fg); font-weight: 600; }
 /* 暗棋：4×8，同高度下寬度為象棋棋盤的 5/9 */

@@ -647,22 +647,31 @@
       el.classList.toggle('turn', g.st === 'p' && g.turn === c);
     });
   }
+  /** 玩家列顯示該方全部 16 顆棋子（依大小排序），已被吃的變暗 */
+  var ROSTER = 'KAABBRRNNCCPPPPP';
   function renderCaps() {
-    var g = S.g, caps = { r: [], b: [] };
-    if (isDk()) g.moves.forEach(function (e) { if (e[0] === 'c') caps[e[1]].push(e[5]); });
-    else g.moves.forEach(function (mv) { if (mv[2]) caps[X.sideOf(mv[2]) === 'r' ? 'b' : 'r'].push(mv[2]); });
+    var g = S.g, lost = {};
+    if (isDk()) g.moves.forEach(function (e) { if (e[0] === 'c') lost[e[5]] = (lost[e[5]] || 0) + 1; });
+    else g.moves.forEach(function (mv) { if (mv[2]) lost[mv[2]] = (lost[mv[2]] || 0) + 1; });
     var bs = bars(), names = isDk() ? A.NAMES : X.NAMES;
     [['barTop', bs.top], ['barBot', bs.bot]].forEach(function (x) {
-      var el = $(x[0]).querySelector('.caps'), list = caps[x[1]];
+      var el = $(x[0]).querySelector('.caps'), col = isDk() ? g.dc && g.dc[x[1]] : x[1];
       el.textContent = '';
-      if (list.length) el.appendChild(document.createTextNode('吃：'));
-      list.forEach(function (p) {
+      if (!col) return; // 暗棋顏色未定
+      var set = col === 'r' ? ROSTER : ROSTER.toLowerCase(), left = {}, frag = document.createDocumentFragment();
+      for (var i = 0; i < set.length; i++) {
+        var p = set[i];
+        left[p] = left[p] == null ? set.split(p).length - 1 - (lost[p] || 0) : left[p];
         var sp = document.createElement('span');
-        sp.className = 'cp ' + pieceSide(p); sp.textContent = names[p];
-        el.appendChild(sp);
-      });
+        sp.className = 'cp ' + col + (left[p] > 0 ? '' : ' dead');
+        sp.textContent = names[p];
+        left[p]--;
+        frag.appendChild(sp);
+      }
+      el.appendChild(frag);
     });
   }
+
   function renderMarks() {
     var g = S.g, last = g.moves[g.moves.length - 1];
     lmFrom.hidden = lmTo.hidden = true;
